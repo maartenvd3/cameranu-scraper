@@ -1,89 +1,140 @@
 import requests
+import time
+import random
+import os
+import json
 from bs4 import BeautifulSoup
 from twilio.rest import Client
-import time
-import os
 
-# ----------------------------------------------------
-# INSTELLINGEN (via Render Environment Variables)
-# ----------------------------------------------------
-TWILIO_ACCOUNT_SID = os.getenv("USb5e1e5c486bd78677f50c00dfb986b88")
-TWILIO_AUTH_TOKEN = os.getenv("7110e791ee726d085b9d39fc867775cd")
+# =========================
+# CONFIG
+# =========================
 
-TWILIO_WHATSAPP_NUMBER = os.getenv("+14155238886")
-MY_WHATSAPP_NUMBER = os.getenv("+31640439520")
+BASE_URL = (
+    "https://www.cameranu.nl/c14732/occasions-en-demo/canon"
+    "?sort=0&show=12&t=0&f=eyJtZXJrIjpbIkNhbm9uIl19"
+)
 
-# Keywords die ALLEMAAL in de titel moeten voorkomen
 KEYWORDS = ["canon", "legria", "mini"]
-# ----------------------------------------------------
+STATE_FILE = "notified_products.json"
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Connection": "keep-alive"
+}
 
-def check_cameranu():
-    """
-    Check Cameranu.nl op producten waarvan de titel
-    ALLE keywords bevat (slimme match).
-    """
-    url = "https://www.cameranu.nl/nl/c/82/camcorders"
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+# =========================
+# TWILIO CONFIG
+# =========================
 
-    response = requests.get(url, headers=headers, timeout=15)
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")
+MY_WHATSAPP_NUMBER = os.getenv("MY_WHATSAPP_NUMBER")
 
-    if response.status_code != 200:
-        print("❌ Cameranu.nl niet bereikbaar")
-        return None
+client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    products = soup.find_all("a", class_="product-card__title")
+# =========================
+# STATE HANDLING
+# =========================
 
-    for product in products:
-        name = product.get_text(strip=True)
-        link = "https://www.cameranu.nl" + product.get("href")
+def load_notified():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
 
-        name_lower = name.lower()
+def save_notified(ids):
+    with open(STATE_FILE, "w") as f:
+        json.dump(list(ids), f)
 
-        # Slimme keyword check
-        if all(keyword in name_lower for keyword in KEYWORDS):
-            print(f"✅ Match gevonden: {name}")
-            return name, link
+# =========================
+# WHATSAPP
+# =========================
 
-    print("ℹ️ Geen match gevonden")
-    return None
-
-
-def send_whatsapp_message(product_name, product_link):
-    """
-    Stuurt WhatsApp bericht via Twilio
-    """
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-    message = (
-        f"📸 *Product beschikbaar!*\n\n"
-        f"{product_name}\n\n"
-        f"🔗 {product_link}"
-    )
-
+def send_whatsapp(message):
     client.messages.create(
         body=message,
         from_=TWILIO_WHATSAPP_NUMBER,
         to=MY_WHATSAPP_NUMBER
     )
 
-    print("📨 WhatsApp verstuurd")
+# =========================
+# SCRAPER
+# =========================
 
+def fetch_page(page):
+    url = BASE_URL if page == 1 else f"{BASE_URL}&page={page}"
+    response = requests.get(url, headers=HEADERS, timeout=20)
+    response.raise_for_status()
+    return response.text
+
+def product_matches(name):
+    name_lower = name.lower()
+    return all(word in name_lower for word in KEYWORDS)
+
+# =========================
+# MAIN
+# =========================
 
 def main():
     print("🚀 Cameranu checker gestart")
 
-    result = check_cameranu()
+    notified_ids = load_notified()
+    found_new = False
+    page = 1
 
-    if result:
-        product_name, product_link = result
-        send_whatsapp_message(product_name, product_link)
-    else:
-        print("⏳ Niets gevonden, volgende check via cron")
+    while True:
+        try:
+            html = fetch_page(page)
+            print(f"📄 Pagina {page} opgehaald")
+        except Exception as e:
+            print(f"❌ Fout bij pagina {page}: {e}")
+            break
 
+        soup = BeautifulSoup(html, "html.parser")
+        products = soup.select("div.cat-item-product-v3")
+
+        if not products:
+            print("ℹ️ Geen producten meer, stoppen.")
+            break
+
+        for product in products:
+            product_id = product.get("data-id")
+            name_tag = product.select_one("a.cat-item-product-v3__name")
+
+            if not product_id or not name_tag:
+                continue
+
+            name = name_tag.text.strip()
+
+            if product_matches(name):
+                if product_id not in notified_ids:
+                    link = "https://www.cameranu.nl" + name_tag.get("href")
+                    message = (
+                        "📸 *Canon Legria Mini gevonden!*\n\n"
+                        f"📝 {name}\n"
+                        f"🔗 {link}"
+                    )
+                    send_whatsapp(message)
+                    notified_ids.add(product_id)
+                    found_new = True
+                    print(f"✅ WhatsApp verzonden voor: {name}")
+
+        # Random delay (anti-bot)
+        time.sleep(random.uniform(3, 6))
+        page += 1
+
+    save_notified(notified_ids)
+
+    if not found_new:
+        print("ℹ️ Geen nieuwe Canon Legria Mini gevonden")
 
 if __name__ == "__main__":
     main()
