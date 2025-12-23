@@ -6,9 +6,9 @@ import json
 from bs4 import BeautifulSoup
 from twilio.rest import Client
 
-# =========================
+# ==================================================
 # CONFIG
-# =========================
+# ==================================================
 
 BASE_URL = (
     "https://www.cameranu.nl/c14732/occasions-en-demo/canon"
@@ -22,16 +22,18 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/122.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.cameranu.nl/",
+    "Upgrade-Insecure-Requests": "1",
     "Connection": "keep-alive"
 }
 
-# =========================
-# TWILIO CONFIG
-# =========================
+# ==================================================
+# TWILIO CONFIG (via Render Environment Variables)
+# ==================================================
 
 TWILIO_ACCOUNT_SID = os.getenv("USb5e1e5c486bd78677f50c00dfb986b88")
 TWILIO_AUTH_TOKEN = os.getenv("7110e791ee726d085b9d39fc867775cd")
@@ -40,9 +42,16 @@ MY_WHATSAPP_NUMBER = os.getenv("+31640439520")
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# =========================
-# STATE HANDLING
-# =========================
+# ==================================================
+# SESSION (ZEER BELANGRIJK)
+# ==================================================
+
+session = requests.Session()
+session.headers.update(HEADERS)
+
+# ==================================================
+# STATE HANDLING (tegen dubbele meldingen)
+# ==================================================
 
 def load_notified():
     if os.path.exists(STATE_FILE):
@@ -54,9 +63,9 @@ def save_notified(ids):
     with open(STATE_FILE, "w") as f:
         json.dump(list(ids), f)
 
-# =========================
+# ==================================================
 # WHATSAPP
-# =========================
+# ==================================================
 
 def send_whatsapp(message):
     client.messages.create(
@@ -65,13 +74,13 @@ def send_whatsapp(message):
         to=MY_WHATSAPP_NUMBER
     )
 
-# =========================
+# ==================================================
 # SCRAPER
-# =========================
+# ==================================================
 
 def fetch_page(page):
     url = BASE_URL if page == 1 else f"{BASE_URL}&page={page}"
-    response = requests.get(url, headers=HEADERS, timeout=20)
+    response = session.get(url, timeout=25)
     response.raise_for_status()
     return response.text
 
@@ -79,21 +88,24 @@ def product_matches(name):
     name_lower = name.lower()
     return all(word in name_lower for word in KEYWORDS)
 
-# =========================
+# ==================================================
 # MAIN
-# =========================
+# ==================================================
 
 def main():
     print("🚀 Cameranu checker gestart")
 
+    # Menselijke startvertraging
+    time.sleep(random.uniform(5, 10))
+
     notified_ids = load_notified()
-    found_new = False
     page = 1
+    found_new = False
 
     while True:
         try:
             html = fetch_page(page)
-            print(f"📄 Pagina {page} opgehaald")
+            print(f"📄 Pagina {page} succesvol opgehaald")
         except Exception as e:
             print(f"❌ Fout bij pagina {page}: {e}")
             break
@@ -102,7 +114,7 @@ def main():
         products = soup.select("div.cat-item-product-v3")
 
         if not products:
-            print("ℹ️ Geen producten meer, stoppen.")
+            print("ℹ️ Geen producten meer gevonden, stoppen.")
             break
 
         for product in products:
@@ -127,7 +139,7 @@ def main():
                     found_new = True
                     print(f"✅ WhatsApp verzonden voor: {name}")
 
-        # Random delay (anti-bot)
+        # Anti-bot delay tussen pagina's
         time.sleep(random.uniform(3, 6))
         page += 1
 
@@ -138,4 +150,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
