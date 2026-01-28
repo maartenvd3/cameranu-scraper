@@ -1,153 +1,144 @@
-import requests
-import time
-import random
-import os
-import json
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from twilio.rest import Client
+from datetime import datetime
+import time
 
-# ==================================================
+# ======================
 # CONFIG
-# ==================================================
+# ======================
+BASE_URL = "https://www.cameranu.nl/c14732/occasions-en-demo/canon"
+ZOEKWOORDEN = ["canon", "legria", "mini"]
 
-BASE_URL = (
-    "https://www.cameranu.nl/c14732/occasions-en-demo/canon"
-    "?sort=0&show=12&t=0&f=eyJtZXJrIjpbIkNhbm9uIl19"
-)
+TWILIO_SID = ""
+TWILIO_AUTH_TOKEN = ""
+TWILIO_WHATSAPP_FROM = ""
+TWILIO_WHATSAPP_TO = ""
 
-KEYWORDS = ["canon", "legria", "mini"]
-STATE_FILE = "notified_products.json"
+LOGFILE = "log.txt"
+MAX_PAGES = 50
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://www.cameranu.nl/",
-    "Upgrade-Insecure-Requests": "1",
-    "Connection": "keep-alive"
-}
+# ======================
+def log(msg):
+    tijd = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    regel = f"[{tijd}] {msg}"
+    print(regel)  # 👈 zichtbaar in Spyder
+    with open(LOGFILE, "a", encoding="utf-8") as f:
+        f.write(regel + "\n")
 
-# ==================================================
-# TWILIO CONFIG (via Render Environment Variables)
-# ==================================================
+def titel_matcht(titel):
+    titel = titel.lower()
+    return all(w in titel for w in ZOEKWOORDEN)
 
-TWILIO_ACCOUNT_SID = os.getenv("")
-TWILIO_AUTH_TOKEN = os.getenv("")
-TWILIO_WHATSAPP_NUMBER = os.getenv("")
-MY_WHATSAPP_NUMBER = os.getenv("")
+# ======================
+def accepteer_cookies(driver):
+    print("🔎 Controleren op cookie pop-up...")
+    try:
+        knop = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//button[contains(., 'Alles')]")
+            )
+        )
+        knop.click()
+        print("🍪 Cookies geaccepteerd")
+        time.sleep(2)
+    except:
+        print("ℹ️ Geen cookie pop-up gevonden")
 
-client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+# ======================
+def haal_producten(driver):
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    return soup.select("a.cat-item-product-v3__name")
 
-# ==================================================
-# SESSION (ZEER BELANGRIJK)
-# ==================================================
+# ======================
+def main():
+    print("🚀 Script gestart")
+    log("Browser starten")
 
-session = requests.Session()
-session.headers.update(HEADERS)
+    options = Options()
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--start-maximized")
 
-# ==================================================
-# STATE HANDLING (tegen dubbele meldingen)
-# ==================================================
-
-def load_notified():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
-
-def save_notified(ids):
-    with open(STATE_FILE, "w") as f:
-        json.dump(list(ids), f)
-
-# ==================================================
-# WHATSAPP
-# ==================================================
-
-def send_whatsapp(message):
-    client.messages.create(
-        body=message,
-        from_=TWILIO_WHATSAPP_NUMBER,
-        to=MY_WHATSAPP_NUMBER
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=options
     )
 
-# ==================================================
-# SCRAPER
-# ==================================================
+    try:
+        driver.get(BASE_URL)
+        print("🌐 Eerste pagina geladen")
+        time.sleep(5)
 
-def fetch_page(page):
-    url = BASE_URL if page == 1 else f"{BASE_URL}&page={page}"
-    response = session.get(url, timeout=25)
-    response.raise_for_status()
-    return response.text
+        accepteer_cookies(driver)
 
-def product_matches(name):
-    name_lower = name.lower()
-    return all(word in name_lower for word in KEYWORDS)
+        gevonden = []
+        page = 1
 
-# ==================================================
-# MAIN
-# ==================================================
+        while page <= MAX_PAGES:
+            url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
+            print(f"➡️ Bezig met pagina {page}: {url}")
+            log(f"Pagina {page} openen")
 
-def main():
-    print("🚀 Cameranu checker gestart")
+            driver.get(url)
+            time.sleep(4)
 
-    # Menselijke startvertraging
-    time.sleep(random.uniform(5, 10))
+            producten = haal_producten(driver)
+            print(f"📦 Pagina {page}: {len(producten)} producten gevonden")
 
-    notified_ids = load_notified()
-    page = 1
-    found_new = False
+            if not producten:
+                print("⛔ Geen producten meer → stoppen")
+                log("Geen producten meer gevonden → stoppen")
+                break
 
-    while True:
-        try:
-            html = fetch_page(page)
-            print(f"📄 Pagina {page} succesvol opgehaald")
-        except Exception as e:
-            print(f"❌ Fout bij pagina {page}: {e}")
-            break
+            for p in producten:
+                titel = p.get_text(strip=True)
+                link = "https://www.cameranu.nl" + p.get("href")
 
-        soup = BeautifulSoup(html, "html.parser")
-        products = soup.select("div.cat-item-product-v3")
+                print(f"   • {titel}")
+                log(f"Product: {titel}")
 
-        if not products:
-            print("ℹ️ Geen producten meer gevonden, stoppen.")
-            break
+                if titel_matcht(titel):
+                    print(f"🎯 MATCH GEVONDEN: {titel}")
+                    log(f"MATCH: {titel}")
+                    gevonden.append((titel, link))
 
-        for product in products:
-            product_id = product.get("data-id")
-            name_tag = product.select_one("a.cat-item-product-v3__name")
+            page += 1
 
-            if not product_id or not name_tag:
-                continue
+        if not gevonden:
+            print("❌ Geen Canon Legria Mini gevonden")
+            log("Geen Canon Legria Mini gevonden")
+            return
 
-            name = name_tag.text.strip()
+        print("📲 WhatsApp bericht wordt verstuurd")
+        log("WhatsApp sturen")
 
-            if product_matches(name):
-                if product_id not in notified_ids:
-                    link = "https://www.cameranu.nl" + name_tag.get("href")
-                    message = (
-                        "📸 *Canon Legria Mini gevonden!*\n\n"
-                        f"📝 {name}\n"
-                        f"🔗 {link}"
-                    )
-                    send_whatsapp(message)
-                    notified_ids.add(product_id)
-                    found_new = True
-                    print(f"✅ WhatsApp verzonden voor: {name}")
+        client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
 
-        # Anti-bot delay tussen pagina's
-        time.sleep(random.uniform(3, 6))
-        page += 1
+        bericht = "📷 *Canon Legria Mini gevonden op Cameranu!*\n\n"
+        for titel, link in gevonden:
+            bericht += f"- {titel}\n{link}\n\n"
 
-    save_notified(notified_ids)
+        client.messages.create(
+            from_=TWILIO_WHATSAPP_FROM,
+            to=TWILIO_WHATSAPP_TO,
+            body=bericht
+        )
 
-    if not found_new:
-        print("ℹ️ Geen nieuwe Canon Legria Mini gevonden")
+        print("✅ WhatsApp verzonden")
+        log("WhatsApp verzonden")
 
+    finally:
+        driver.quit()
+        print("🧹 Browser gesloten")
+        log("Browser gesloten")
+
+# ======================
 if __name__ == "__main__":
     main()
 
