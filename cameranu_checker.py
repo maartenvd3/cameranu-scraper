@@ -35,10 +35,10 @@ HEADERS = {
 # TWILIO CONFIG (via Render Environment Variables)
 # ==================================================
 
-TWILIO_ACCOUNT_SID = os.getenv("USb5e1e5c486bd78677f50c00dfb986b88")
-TWILIO_AUTH_TOKEN = os.getenv("7110e791ee726d085b9d39fc867775cd")
-TWILIO_WHATSAPP_NUMBER = os.getenv("+14155238886")
-MY_WHATSAPP_NUMBER = os.getenv("+31640439520")
+TWILIO_ACCOUNT_SID = os.getenv("")
+TWILIO_AUTH_TOKEN = os.getenv("")
+TWILIO_WHATSAPP_NUMBER = os.getenv("")
+MY_WHATSAPP_NUMBER = os.getenv("")
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -150,3 +150,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
